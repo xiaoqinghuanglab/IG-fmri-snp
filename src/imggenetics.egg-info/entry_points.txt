@@ -1,0 +1,2 @@
+[console_scripts]
+imggenetics = imggenetics.cli:main

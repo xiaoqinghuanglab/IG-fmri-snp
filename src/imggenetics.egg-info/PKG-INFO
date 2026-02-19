@@ -1,3 +1,16 @@
+Metadata-Version: 2.4
+Name: imggenetics
+Version: 0.1.0
+Summary: Automated SNP×Subtype OLS interaction pipeline for connectivity phenotypes
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: pandas>=2.0
+Requires-Dist: numpy>=1.24
+Requires-Dist: statsmodels>=0.14
+Requires-Dist: tqdm>=4.66
+Dynamic: license-file
+
 # Image-Genetics Regression Pipeline
 
 This repository contains a **fully automated OLS regression pipeline** to test **SNP × subtype interactions** on **resting-state connectivity features**, adjusting for common covariates (age, sex, scanner, scan_type).
