@@ -37,7 +37,7 @@ That one command will:
   - `SNP` (rsID, e.g., `rs12345`)
   - `Case`, `Control` (subtype names)
 
-## Outputs
+## Image-genetic Outputs
 
 Written to `outputs/` (default):
 
