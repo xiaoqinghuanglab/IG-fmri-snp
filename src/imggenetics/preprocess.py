@@ -6,6 +6,33 @@ from typing import Dict, List, Tuple
 
 from .utils import clean_column_name
 
+# preprocess.py
+
+import pandas as pd
+
+def remove_low_nft(covariate_df):
+    """
+    Remove lowNFT group subjects.
+    """
+    print("Original subjects:", len(covariate_df))
+
+    filtered_df = covariate_df[covariate_df["group"] != "lowNFT"].copy()
+
+    print("After removing lowNFT:", len(filtered_df))
+    return filtered_df
+
+
+def generate_comparisons():
+    """
+    Define only the 3 valid comparisons.
+    """
+    comparisons = [
+        ("AsymAD", "TypicalAD"),
+        ("TypicalAD", "CN"),
+        ("AsymAD", "CN")
+    ]
+    return comparisons
+
 
 def fisher_r_to_z(connectivity: pd.DataFrame) -> pd.DataFrame:
     """
