@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Optional, Tuple, Set
 from tqdm import tqdm
 
 
+
 def build_gwas_snp_groups(
     merged: pd.DataFrame,
     snp_metadata: pd.DataFrame,
