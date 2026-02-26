@@ -2,3 +2,16 @@ pandas>=2.0
 numpy>=1.24
 statsmodels>=0.14
 tqdm>=4.66
+
+# GWAS helpers / validation
+scipy>=1.10
+openpyxl>=3.1
+
+# fMRI connectivity feature derivation
+nibabel>=5.2
+nilearn>=0.10
+scikit-learn>=1.3
+
+# plotting utilities (optional but used by some scripts)
+matplotlib>=3.7
+seaborn>=0.13
