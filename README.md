@@ -46,16 +46,12 @@ bash run.sh python -c "import imggenetics; print('ok')"
 
 You can also install manually:
 
-HEAD
-## Image-genetic Outputs
-=======
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 pip install -e .
 ```
- 7157d3c (Expand repo: full pipeline)
 
 ---
 

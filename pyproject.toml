@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "imggenetics"
-version = "0.2.0"
+version = "0.2.1"
 description = "Imaging-genetics utilities for subtype-aware rs-fMRI connectivity analysis (IG-fmri-snp)"
 readme = "README.md"
 requires-python = ">=3.9"

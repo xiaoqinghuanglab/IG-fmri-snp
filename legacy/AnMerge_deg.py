@@ -1,3 +1,17 @@
+"""Legacy (original) analysis script.
+
+This file is kept for provenance and for readers who want to see the original,
+notebook-style workflow. For a fully parameterized version (recommended for
+reproducible runs), see the corresponding script under:
+
+  scripts/transcriptomics/
+
+Notes
+-----
+- Paths in this legacy script are hard-coded (as in the original analysis).
+- New users should prefer the parameterized scripts + README instructions.
+"""
+
 import pandas as pd
 import numpy as np
 from scipy import stats
@@ -212,4 +226,3 @@ for g1, g2 in COMPARISONS:
         print(f" -> Significant Genes (FDR < 0.05): {sig_count}")
 
 print(f"\nAll analyses finished. Check '{OUTPUT_DIR}' folder.")
-
