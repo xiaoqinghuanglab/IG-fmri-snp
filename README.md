@@ -1,4 +1,6 @@
-# IG-fmri-snp — subtype-aware imaging genetics for rs-fMRI connectivity
+# Subtype-aware imaging genetics for rs-fMRI connectivity
+
+This repository implements a subtype-aware imaging-genetics pipeline for Alzheimer’s disease, linking common genetic variation to resting-state fMRI functional connectivity. It harmonizes ADNI genotypes, prioritizes SNPs via GWAS, derives MSDL-based connectivity features, and runs SNP×subtype OLS models with FDR control. Downstream modules support variant annotation, enrichment, PPI, and cross-cohort validation.
 
 This repository collects a complete **imaging-genetics workflow** that connects:
 
