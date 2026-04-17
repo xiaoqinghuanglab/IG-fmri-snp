@@ -1,162 +1,160 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
 
-# preprocess_fmri_fsl.sh
-# ----------------------
-# Minimal rs-fMRI preprocessing with FSL:
-#   1) motion correction (mcflirt)
-#   2) slice timing correction (slicetimer)
-#   3) register mean image to MNI (flirt)
-#   4) apply transform to each volume (split/apply/merge)
-#   5) smoothing (fslmaths)
-#
-# This is a parameterized (path-flexible) version of the original script.
-#
-# Example:
-#   bash scripts/fmri/preprocess_fmri_fsl.sh \
-#     --input-dir /path/to/nifti_4d \
-#     --output-dir /path/to/processed \
-#     --tr 3 \
-#     --smooth-sigma 2
+# ======================================
+# SLURM DIRECTIVES (Resource Allocation)
+# ======================================
+#SBATCH --job-name=ADNI3_Year5
+#SBATCH -A r01042
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=100G
+#SBATCH --time=24:00:00
+#SBATCH --array=1-99
+#SBATCH --output=IG-fmri-snp/ADNI_Outputs/derivatives/logs/%x/fmriprep_%A_%a.out
+#SBATCH --error=IG-fmri-snp/ADNI_Outputs/derivatives/logs/%x/fmriprep_%A_%a.err
 
-usage() {
-  cat <<EOF
-Usage:
-  preprocess_fmri_fsl.sh --input-dir DIR --output-dir DIR [options]
+# Load modules
+module purge
+module load apptainer
 
-Required:
-  --input-dir DIR       Folder with input 4D NIfTI files (*.nii.gz)
-  --output-dir DIR      Folder to write processed outputs
+# =============================================================================
+# CONFIGURATION & PATHS
+# =============================================================================
+DATASET_NAME="Data_folder_Name"
+BASE_DIR="IG-fmri-snp"
+BIDS_DIR="${BASE_DIR}/ADNI_Outputs/datasets/${DATASET_NAME}"
+DERIVATIVES_DIR="${BASE_DIR}/ADNI_Outputs/derivatives/${DATASET_NAME}"
+WORK_DIR="/N/scratch/${USER}/fmriprep_work/job_${SLURM_ARRAY_JOB_ID}_task_${SLURM_ARRAY_TASK_ID}"
+TF_HOME="${BASE_DIR}/ADNI_Outputs/work/templateflow"
+FS_LICENSE="${BASE_DIR}/Hasan/license.txt"
+FMRIPREP_SIF="${BASE_DIR}/Hasan/fmriprep-25.2.3.sif"
 
-Options:
-  --tr FLOAT            Repetition time in seconds (default: 3)
-  --mni-ref PATH        MNI reference brain (default: \$FSLDIR/data/standard/MNI152_T1_2mm_brain.nii.gz)
-  --smooth-sigma FLOAT  Spatial smoothing sigma (default: 2)
-  --slice-order STR     slicetimer flag: "odd" or "even" (default: odd)
-  --pattern GLOB        File glob inside input-dir (default: *.nii.gz)
-  --keep-split          Keep split volumes (default: delete)
-  -h, --help            Show help
+FS_SUBJECTS_DIR="${DERIVATIVES_DIR}/sourcedata/freesurfer"
 
-Notes:
-  - Requires FSL commands: mcflirt, slicetimer, fslmaths, flirt, fslsplit, fslmerge
-  - Output per input file: <base>_smooth.nii.gz
-EOF
-}
+# =============================================================================
+# FSAVERAGE TEMPLATE SETUP (Race-condition safe)
+# Task 1 runs setup; all others wait until it's done.
+# =============================================================================
+TEMPLATE_READY_FLAG="${FS_SUBJECTS_DIR}/.templates_ready"
 
-INPUT_DIR=""
-OUTPUT_DIR=""
-TR="3"
-MNI_REF="${FSLDIR:-}/data/standard/MNI152_T1_2mm_brain.nii.gz"
-SMOOTH_SIGMA="2"
-SLICE_ORDER="odd"
-PATTERN="*.nii.gz"
-KEEP_SPLIT="0"
+if [ "${SLURM_ARRAY_TASK_ID}" -eq 1 ]; then
+    echo "Task 1: Running fsaverage template setup..."
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --input-dir) INPUT_DIR="$2"; shift 2 ;;
-    --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
-    --tr) TR="$2"; shift 2 ;;
-    --mni-ref) MNI_REF="$2"; shift 2 ;;
-    --smooth-sigma) SMOOTH_SIGMA="$2"; shift 2 ;;
-    --slice-order) SLICE_ORDER="$2"; shift 2 ;;
-    --pattern) PATTERN="$2"; shift 2 ;;
-    --keep-split) KEEP_SPLIT="1"; shift 1 ;;
-    -h|--help) usage; exit 0 ;;
-    *) echo "[ERROR] Unknown arg: $1"; usage; exit 2 ;;
-  esac
-done
+    mkdir -p "${FS_SUBJECTS_DIR}"
 
-if [[ -z "$INPUT_DIR" || -z "$OUTPUT_DIR" ]]; then
-  echo "[ERROR] --input-dir and --output-dir are required."
-  usage
-  exit 2
+    # Clean stale/incomplete templates
+    rm -rf "${FS_SUBJECTS_DIR}/fsaverage"
+    rm -rf "${FS_SUBJECTS_DIR}/fsaverage5"
+    rm -f  "${TEMPLATE_READY_FLAG}"
+
+    apptainer exec --cleanenv \
+        -B "${FS_SUBJECTS_DIR}":/out \
+        "${FMRIPREP_SIF}" \
+        cp -r /opt/freesurfer/subjects/fsaverage /out/
+
+    apptainer exec --cleanenv \
+        -B "${FS_SUBJECTS_DIR}":/out \
+        "${FMRIPREP_SIF}" \
+        cp -r /opt/freesurfer/subjects/fsaverage5 /out/
+
+    # Signal to all other tasks that templates are ready
+    touch "${TEMPLATE_READY_FLAG}"
+    echo "Task 1: Template setup complete. Flag written."
+
+else
+    echo "Task ${SLURM_ARRAY_TASK_ID}: Waiting for template setup (Task 1)..."
+    WAIT_SECONDS=0
+    MAX_WAIT=300  # 5 minute timeout
+
+    while [ ! -f "${TEMPLATE_READY_FLAG}" ]; do
+        sleep 10
+        WAIT_SECONDS=$((WAIT_SECONDS + 10))
+        if [ "${WAIT_SECONDS}" -ge "${MAX_WAIT}" ]; then
+            echo "ERROR: Timed out waiting for template flag after ${MAX_WAIT}s. Exiting."
+            exit 1
+        fi
+    done
+
+    echo "Task ${SLURM_ARRAY_TASK_ID}: Templates ready. Proceeding."
 fi
 
-mkdir -p "$OUTPUT_DIR"
-
-# Validate FSL tools
-for cmd in mcflirt slicetimer fslmaths flirt fslsplit fslmerge; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "[ERROR] Missing command '$cmd'. Make sure FSL is installed and sourced."
-    exit 3
-  fi
-done
-
-if [[ ! -f "$MNI_REF" ]]; then
-  echo "[ERROR] MNI reference not found: $MNI_REF"
-  echo "Tip: pass --mni-ref explicitly, or ensure FSLDIR is set."
-  exit 3
+# =============================================================================
+# PIPELINE EXECUTION
+# =============================================================================
+if [ ! -f "${FS_LICENSE}" ]; then
+    echo "ERROR: FreeSurfer license not found at ${FS_LICENSE}"
+    exit 1
 fi
 
-shopt -s nullglob
-files=("$INPUT_DIR"/$PATTERN)
-if [[ ${#files[@]} -eq 0 ]]; then
-  echo "[ERROR] No files found in $INPUT_DIR with pattern '$PATTERN'"
-  exit 4
+SUBJECTS_FILE="${BIDS_DIR}/participants.tsv"
+RAW_SUB=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "${SUBJECTS_FILE}" | awk '{print $1}')
+
+if [ -z "${RAW_SUB}" ]; then
+    echo "Subject not found on line $((SLURM_ARRAY_TASK_ID + 1)) of TSV. Exiting."
+    exit 0
 fi
 
-echo "[INFO] Input:  $INPUT_DIR"
-echo "[INFO] Output: $OUTPUT_DIR"
-echo "[INFO] TR=$TR | smooth_sigma=$SMOOTH_SIGMA | slice_order=$SLICE_ORDER"
+BIDS_ID=${RAW_SUB#sub-}
+FS_OUTPUT="${FS_SUBJECTS_DIR}/sub-${BIDS_ID}"
 
-for func_in in "${files[@]}"; do
-  echo "🔄 Processing: $func_in"
-  base=$(basename "$func_in" .nii.gz)
+if [ -d "${FS_OUTPUT}" ]; then
+    echo "==================================================="
+    echo "SKIPPING: ${RAW_SUB}"
+    echo "Reason: FreeSurfer output already exists at:"
+    echo "  ${FS_OUTPUT}"
+    echo "==================================================="
+    exit 0
+fi
 
-  mc="${OUTPUT_DIR}/${base}_mc.nii.gz"
-  st="${OUTPUT_DIR}/${base}_st.nii.gz"
-  mean="${OUTPUT_DIR}/${base}_mean.nii.gz"
-  mean_mni="${OUTPUT_DIR}/${base}_mean_mni.nii.gz"
-  mat="${OUTPUT_DIR}/${base}_2mni.mat"
-  tmp_split_dir="${OUTPUT_DIR}/${base}_split"
-  mkdir -p "$tmp_split_dir"
+BOLD_CHECK=$(find "${BIDS_DIR}/${RAW_SUB}/func" -name "*_bold.nii.gz" -print -quit 2>/dev/null)
 
-  # Step 1: Motion correction
-  echo "📌 [1/6] Motion correction..."
-  mcflirt -in "$func_in" -out "$mc" -refvol middle -plots
+if [ -z "${BOLD_CHECK}" ]; then
+    echo "WARNING: No BOLD data found for ${RAW_SUB}. Switching to ANATOMICAL-ONLY mode."
+    EXTRA_FLAGS="--anat-only"
+else
+    echo "SUCCESS: BOLD data found for ${RAW_SUB}. Running full pipeline."
+    EXTRA_FLAGS=""
+fi
 
-  # Step 2: Slice timing correction
-  echo "📌 [2/6] Slice timing correction..."
-  if [[ "$SLICE_ORDER" == "odd" ]]; then
-    slicetimer -i "$mc" -o "$st" --odd -r "$TR"
-  elif [[ "$SLICE_ORDER" == "even" ]]; then
-    slicetimer -i "$mc" -o "$st" --even -r "$TR"
-  else
-    echo "[ERROR] --slice-order must be 'odd' or 'even' (got: $SLICE_ORDER)"
-    exit 2
-  fi
+mkdir -p "${DERIVATIVES_DIR}" "${WORK_DIR}" "${TF_HOME}"
 
-  # Step 3: Compute mean image
-  echo "📌 [3/6] Mean functional image..."
-  fslmaths "$st" -Tmean "$mean"
+echo "Processing: ${RAW_SUB}"
+echo "Mode:       ${EXTRA_FLAGS:-Full Pipeline}"
 
-  # Step 4: Register mean to MNI
-  echo "📌 [4/6] MNI registration..."
-  flirt -in "$mean" -ref "$MNI_REF" -out "$mean_mni" -omat "$mat" -dof 12 -cost corratio
+# =============================================================================
+# EXECUTION
+# =============================================================================
+apptainer run --cleanenv \
+    -B ${BIDS_DIR}:/data:ro \
+    -B ${DERIVATIVES_DIR}:/out \
+    -B ${WORK_DIR}:/work \
+    -B ${TF_HOME}:/templateflow \
+    -B ${FS_LICENSE}:/opt/freesurfer/license.txt \
+    --env TEMPLATEFLOW_HOME=/templateflow \
+    ${FMRIPREP_SIF} \
+    /data /out participant \
+    --participant-label ${BIDS_ID} \
+    --work-dir /work \
+    --nthreads 8 \
+    --omp-nthreads 4 \
+    --mem-mb 90000 \
+    --output-spaces MNI152NLin2009cAsym:res-2 anat func fsaverage5 \
+    --output-layout bids \
+    --use-syn-sdc warn \
+    --cifti-output \
+    --skull-strip-t1w auto \
+    --bids-database-dir /work/bids_db \
+    --skip-bids-validation \
+    --notrack \
+    ${EXTRA_FLAGS}
 
-  # Step 5: Split and apply flirt to each volume
-  echo "📌 [5/6] Apply transform to 4D (per volume)..."
-  fslsplit "$st" "$tmp_split_dir/vol_" -t
-
-  vol_list=()
-  for vol in "$tmp_split_dir"/vol_*.nii.gz; do
-    vol_out="${vol%.nii.gz}_mni.nii.gz"
-    flirt -in "$vol" -ref "$MNI_REF" -applyxfm -init "$mat" -out "$vol_out"
-    vol_list+=("$vol_out")
-  done
-
-  merged="${OUTPUT_DIR}/${base}_mni.nii.gz"
-  fslmerge -t "$merged" "${vol_list[@]}"
-
-  # Step 6: Smooth final 4D image
-  echo "📌 [6/6] Smoothing..."
-  smooth="${OUTPUT_DIR}/${base}_smooth.nii.gz"
-  fslmaths "$merged" -s "$SMOOTH_SIGMA" "$smooth"
-
-  echo "✅ Output: $smooth"
-
-  if [[ "$KEEP_SPLIT" != "1" ]]; then
-    rm -rf "$tmp_split_dir"
-  fi
-done
+# ============================================================================
+# POST-PROCESSING CLEANUP
+# ============================================================================
+if [ $? -eq 0 ]; then
+    echo "SUCCESS: sub-${BIDS_ID} completed. Removing work directory."
+    rm -rf "${WORK_DIR}"
+else
+    echo "FAILURE: sub-${BIDS_ID} failed. Check logs and work directory at ${WORK_DIR}"
+    exit 1
+fi
