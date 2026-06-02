@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Usage:
-#   bash run.sh imggenetics --data-dir data --output-dir outputs
+#   bash run.sh imggenetics --data-dir data --output-dir outputs/imggenetics
 #   bash run.sh python scripts/fmri/compute_connectivity_msdl.py --help
 #
 # This is a thin convenience wrapper that:
@@ -29,7 +29,7 @@ pip install -e . >/dev/null
 if [ "$#" -eq 0 ]; then
   echo "[ERROR] No command provided."
   echo "Example:"
-  echo "  bash run.sh imggenetics --data-dir data --output-dir outputs"
+  echo "  bash run.sh imggenetics --data-dir data --output-dir outputs/imggenetics"
   exit 2
 fi
 

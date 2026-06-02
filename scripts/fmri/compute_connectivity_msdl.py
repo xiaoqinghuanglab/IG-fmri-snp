@@ -1,173 +1,344 @@
 #!/usr/bin/env python3
-"""Compute MSDL (39 ROI) functional connectivity features from preprocessed rs-fMRI.
+"""Extract MSDL GraphicalLassoCV connectivity edges from fMRIPrep outputs.
 
-What it does (high level):
-  - loads each subject's 4D NIfTI
-  - extracts ROI time series using the MSDL atlas
-  - optionally aligns all subjects to a fixed number of time points (truncate/pad)
-  - fits GraphicalLassoCV and uses the precision matrix as sparse connectivity
-  - writes a subject-by-edge CSV with 741 edges (39*38/2)
-
-Inputs
-  --input-dir: directory of 4D NIfTI files (*.nii.gz)
-  --msdl-maps: optional local atlas maps file; if omitted, will try nilearn's fetch_atlas_msdl()
-
-Output
-  --output-csv: CSV with:
-    - Subject_ID column
-    - Connectivity_<ROI1>_<ROI2> columns
-
-Example
-  python scripts/fmri/compute_connectivity_msdl.py \
-    --input-dir /path/processed_nifti \
-    --output-csv outputs/connectivity/Connectivity_matrix_all_subjects_region_pairs.csv \
-    --tr 3 \
-    --fixed-length median
+This script follows the manuscript-aligned connectivity workflow:
+  - uses fMRIPrep MNI-space preprocessed resting-state BOLD files
+  - applies nuisance regression using common fMRIPrep confounds
+  - uses the 39-region MSDL atlas
+  - extracts ROI time series with detrending, filtering, and z-scoring
+  - estimates GraphicalLassoCV connectivity
+  - converts the precision matrix to signed partial correlations
+  - exports one subject-by-edge CSV with 741 upper-triangle edges
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-import nibabel as nib
+from nilearn.datasets import fetch_atlas_msdl
+from nilearn.maskers import NiftiMapsMasker
 from sklearn.covariance import GraphicalLassoCV
+from sklearn.exceptions import ConvergenceWarning
 
-try:
-    from nilearn.datasets import fetch_atlas_msdl
-    from nilearn.maskers import NiftiMapsMasker
-except Exception as e:
-    raise SystemExit(
-        "nilearn is required for this script. Install dependencies via: pip install -r requirements.txt"
-    ) from e
+
+MSDL_EXPECTED_ROIS = 39
+
+
+def normalize_subject_id(value: str) -> str:
+    text = str(value).strip()
+    if text.startswith("sub-"):
+        text = text[4:]
+
+    if re.match(r"^\d{3}_S_\d{4}$", text):
+        return text
+
+    match = re.match(r"^(\d{3})S(\d{4})$", text)
+    if match:
+        return f"{match.group(1)}_S_{match.group(2)}"
+
+    return text
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Compute MSDL sparse connectivity features (GraphicalLassoCV).")
-    p.add_argument("--input-dir", type=Path, required=True, help="Folder containing preprocessed 4D NIfTI files.")
-    p.add_argument("--pattern", type=str, default="*_smooth.nii.gz", help="Glob pattern for input NIfTI files.")
-    p.add_argument("--output-csv", type=Path, required=True, help="Output CSV path (subject-by-edge matrix).")
-    p.add_argument("--tr", type=float, default=3.0, help="TR in seconds (used by band-pass filtering).")
-    p.add_argument("--high-pass", type=float, default=0.01, help="High-pass cutoff (Hz).")
-    p.add_argument("--low-pass", type=float, default=0.1, help="Low-pass cutoff (Hz).")
-    p.add_argument("--detrend", action="store_true", help="Detrend ROI time series.")
-    p.add_argument("--no-standardize", action="store_true", help="Disable standardization (z-scoring).")
-    p.add_argument("--msdl-maps", type=Path, default=None, help="Optional local path to the MSDL atlas maps NIfTI.")
-    p.add_argument("--fixed-length", type=str, default="none",
-                   choices=["none", "median", "min"],
-                   help="Time-series length alignment: none|min|median (truncate/pad).")
-    p.add_argument("--id-regex", type=str, default=r"(\d{3}_S_\d{4})",
-                   help="Regex with one capture group to extract Subject_ID from filename.")
-    p.add_argument("--abs-edges", action="store_true", help="Use absolute precision values for edges (default in paper).")
-    p.add_argument("--random-state", type=int, default=0, help="Random state for GraphicalLassoCV.")
-    return p.parse_args()
+    parser = argparse.ArgumentParser(description="Compute MSDL partial-correlation connectivity from fMRIPrep outputs.")
+    parser.add_argument(
+        "--input-dir",
+        type=Path,
+        required=True,
+        help="fMRIPrep derivatives directory containing sub-*/func folders.",
+    )
+    parser.add_argument(
+        "--output-csv",
+        type=Path,
+        required=True,
+        help="Output CSV path for the subject-by-edge matrix.",
+    )
+    parser.add_argument(
+        "--log-csv",
+        type=Path,
+        default=None,
+        help="Optional processing log CSV. Defaults to <output>.log.csv.",
+    )
+    parser.add_argument(
+        "--atlas-cache-dir",
+        type=Path,
+        default=None,
+        help="Optional cache directory for nilearn atlas downloads.",
+    )
+    parser.add_argument("--low-pass", type=float, default=0.10, help="Low-pass cutoff in Hz.")
+    parser.add_argument("--high-pass", type=float, default=0.01, help="High-pass cutoff in Hz.")
+    parser.add_argument(
+        "--include-global-signal",
+        action="store_true",
+        help="Include global signal in the confound regression set.",
+    )
+    parser.add_argument(
+        "--abs-edges",
+        action="store_true",
+        help="Take absolute values of partial-correlation edges before export.",
+    )
+    return parser.parse_args()
 
 
-def subject_id_from_path(p: Path, id_re: re.Pattern) -> str:
-    m = id_re.search(p.name)
-    if m:
-        return m.group(1)
-    return p.stem.replace(".nii", "")
+def read_json_value(json_file: Path, key: str, default=None):
+    if not json_file.exists():
+        return default
+    try:
+        with json_file.open("r") as handle:
+            payload = json.load(handle)
+        return payload.get(key, default)
+    except Exception:
+        return default
 
 
-def infer_T(img_path: Path) -> int:
-    img = nib.load(str(img_path))
-    shape = img.shape
-    if len(shape) < 4:
-        raise ValueError(f"Expected 4D image, got shape={shape} for {img_path}")
-    return int(shape[3])
+def get_subject_dirs(base_dir: Path) -> list[Path]:
+    return sorted(path for path in base_dir.glob("sub-*") if path.is_dir())
 
 
-def align_length(ts: np.ndarray, L: int) -> np.ndarray:
-    """Truncate or zero-pad time series (T x R) to length L."""
-    T, R = ts.shape
-    if T == L:
-        return ts
-    if T > L:
-        return ts[:L, :]
-    out = np.zeros((L, R), dtype=ts.dtype)
-    out[:T, :] = ts
-    return out
+def get_run_prefix_from_bold_name(bold_name: str) -> str:
+    return bold_name.split("_space-")[0]
+
+
+def find_bold_files(func_dir: Path) -> list[Path]:
+    pattern = "*task-rest*_space-MNI152NLin2009cAsym*_desc-preproc_bold.nii.gz"
+    return sorted(func_dir.glob(pattern))
+
+
+def load_confounds(confounds_tsv: Path, include_global_signal: bool = False) -> pd.DataFrame | None:
+    if not confounds_tsv.exists():
+        return None
+
+    df = pd.read_csv(confounds_tsv, sep="\t")
+    base_cols = [
+        "trans_x",
+        "trans_y",
+        "trans_z",
+        "rot_x",
+        "rot_y",
+        "rot_z",
+        "trans_x_derivative1",
+        "trans_y_derivative1",
+        "trans_z_derivative1",
+        "rot_x_derivative1",
+        "rot_y_derivative1",
+        "rot_z_derivative1",
+        "white_matter",
+        "csf",
+        "framewise_displacement",
+        "std_dvars",
+    ]
+    if include_global_signal:
+        base_cols.append("global_signal")
+
+    selected = [column for column in base_cols if column in df.columns]
+    selected.extend(column for column in df.columns if column.startswith("cosine"))
+    selected.extend(column for column in df.columns if column.startswith("non_steady_state_outlier"))
+
+    if not selected:
+        return None
+
+    confounds = df[selected].copy()
+    confounds = confounds.fillna(0.0)
+    return confounds
+
+
+def precision_to_partial_corr(precision: np.ndarray) -> np.ndarray:
+    diagonal = np.sqrt(np.diag(precision))
+    outer = np.outer(diagonal, diagonal)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        partial = -precision / outer
+    partial[np.isnan(partial)] = 0.0
+    partial[np.isinf(partial)] = 0.0
+    np.fill_diagonal(partial, 1.0)
+    return partial
+
+
+def build_edge_features(partial_corr: np.ndarray, labels: list[str], abs_edges: bool) -> dict[str, float]:
+    features: dict[str, float] = {}
+    n_rois = partial_corr.shape[0]
+    for i in range(n_rois):
+        for j in range(i + 1, n_rois):
+            value = float(partial_corr[i, j])
+            if abs_edges:
+                value = float(abs(value))
+            features[f"Connectivity_{labels[i]}_{labels[j]}"] = value
+    return features
+
+
+def extract_run_features(
+    bold_file: Path,
+    confounds_file: Path,
+    atlas,
+    low_pass: float,
+    high_pass: float,
+    include_global_signal: bool,
+    abs_edges: bool,
+) -> dict[str, float]:
+    run_prefix = get_run_prefix_from_bold_name(bold_file.name)
+    bold_json = bold_file.with_suffix("").with_suffix(".json")
+    tr = read_json_value(bold_json, "RepetitionTime", None)
+    confounds = load_confounds(confounds_file, include_global_signal=include_global_signal)
+
+    masker = NiftiMapsMasker(
+        maps_img=atlas.maps,
+        standardize="zscore_sample",
+        detrend=True,
+        low_pass=low_pass if tr is not None else None,
+        high_pass=high_pass if tr is not None else None,
+        t_r=tr,
+        verbose=0,
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=UserWarning)
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        timeseries = masker.fit_transform(str(bold_file), confounds=confounds)
+
+    labels = [str(label) for label in atlas.labels]
+    if timeseries.shape[1] != MSDL_EXPECTED_ROIS or len(labels) != MSDL_EXPECTED_ROIS:
+        raise ValueError(
+            f"MSDL ROI count mismatch for {run_prefix}: got {timeseries.shape[1]}, expected {MSDL_EXPECTED_ROIS}."
+        )
+
+    model = GraphicalLassoCV(cv=5, max_iter=2000, n_jobs=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=ConvergenceWarning)
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        warnings.simplefilter("ignore", category=UserWarning)
+        model.fit(timeseries)
+
+    partial_corr = precision_to_partial_corr(model.precision_)
+    return build_edge_features(partial_corr, labels, abs_edges=abs_edges)
 
 
 def main():
     args = parse_args()
-    in_dir = args.input_dir.expanduser().resolve()
-    files = sorted(in_dir.glob(args.pattern))
-    if not files:
-        raise SystemExit(f"No files found in {in_dir} with pattern '{args.pattern}'")
 
-    id_re = re.compile(args.id_regex)
+    warnings.filterwarnings("ignore", category=ConvergenceWarning)
+    warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-    # Load atlas
-    if args.msdl_maps is None:
-        msdl = fetch_atlas_msdl()
-        maps_img = msdl["maps"]
-        labels = [str(x) for x in msdl["labels"]]
-    else:
-        maps_img = str(args.msdl_maps.expanduser().resolve())
-        # If you provide custom maps, also provide labels separately if needed.
-        # We'll fall back to ROI_0..ROI_38
-        labels = [f"ROI_{i}" for i in range(39)]
+    input_dir = args.input_dir.expanduser().resolve()
+    output_csv = args.output_csv.expanduser().resolve()
+    log_csv = args.log_csv.expanduser().resolve() if args.log_csv else output_csv.with_suffix(".log.csv")
 
-    masker = NiftiMapsMasker(
-        maps_img=maps_img,
-        detrend=args.detrend,
-        standardize=not args.no_standardize,
-        high_pass=args.high_pass,
-        low_pass=args.low_pass,
-        t_r=args.tr,
+    if not input_dir.exists():
+        raise SystemExit(f"Input directory not found: {input_dir}")
+
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
+    log_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    atlas = fetch_atlas_msdl(
+        data_dir=str(args.atlas_cache_dir.expanduser().resolve()) if args.atlas_cache_dir else None,
+        verbose=0,
     )
+    subjects = get_subject_dirs(input_dir)
+    if not subjects:
+        raise SystemExit(f"No subject folders found under: {input_dir}")
 
-    # Decide fixed length
-    target_L = None
-    if args.fixed_length != "none":
-        lengths = [infer_T(f) for f in files]
-        if args.fixed_length == "min":
-            target_L = int(np.min(lengths))
-        elif args.fixed_length == "median":
-            target_L = int(np.median(lengths))
+    rows: list[dict[str, float | str]] = []
+    log_rows: list[dict[str, object]] = []
 
-    rows = []
-    for f in files:
-        sid = subject_id_from_path(f, id_re)
+    print(f"Found {len(subjects)} subject folders in {input_dir}")
 
-        ts = masker.fit_transform(str(f))  # (T, 39)
-        if target_L is not None:
-            ts = align_length(ts, target_L)
+    for subject_dir in subjects:
+        func_dir = subject_dir / "func"
+        subject_id = normalize_subject_id(subject_dir.name)
 
-        # Graphical lasso -> precision matrix
-        gl = GraphicalLassoCV()
-        gl.fit(ts)
-        precision = gl.precision_.copy()
+        if not func_dir.exists():
+            log_rows.append(
+                {
+                    "subject_id": subject_id,
+                    "status": "skip_no_func_folder",
+                    "n_runs_found": 0,
+                    "n_runs_used": 0,
+                    "message": "No func folder",
+                }
+            )
+            continue
 
-        # build edges (upper triangle, exclude diagonal)
-        n = precision.shape[0]
-        feats = {}
-        for i in range(n):
-            for j in range(i + 1, n):
-                v = precision[i, j]
-                if args.abs_edges:
-                    v = float(abs(v))
-                else:
-                    v = float(v)
-                feats[f"Connectivity_{labels[i]}_{labels[j]}"] = v
+        bold_files = find_bold_files(func_dir)
+        if not bold_files:
+            log_rows.append(
+                {
+                    "subject_id": subject_id,
+                    "status": "skip_no_mni_bold",
+                    "n_runs_found": 0,
+                    "n_runs_used": 0,
+                    "message": "No MNI-space preprocessed BOLD files found",
+                }
+            )
+            continue
 
-        feats["Subject_ID"] = sid
-        rows.append(feats)
+        run_features: list[dict[str, float]] = []
+        run_errors: list[str] = []
+
+        for bold_file in bold_files:
+            run_prefix = get_run_prefix_from_bold_name(bold_file.name)
+            confounds_file = func_dir / f"{run_prefix}_desc-confounds_timeseries.tsv"
+
+            try:
+                if not confounds_file.exists():
+                    raise FileNotFoundError(f"Missing confounds file: {confounds_file.name}")
+
+                features = extract_run_features(
+                    bold_file=bold_file,
+                    confounds_file=confounds_file,
+                    atlas=atlas,
+                    low_pass=args.low_pass,
+                    high_pass=args.high_pass,
+                    include_global_signal=args.include_global_signal,
+                    abs_edges=args.abs_edges,
+                )
+                run_features.append(features)
+            except Exception as exc:
+                run_errors.append(f"{run_prefix}: {exc}")
+
+        if not run_features:
+            log_rows.append(
+                {
+                    "subject_id": subject_id,
+                    "status": "error",
+                    "n_runs_found": len(bold_files),
+                    "n_runs_used": 0,
+                    "message": " | ".join(run_errors),
+                }
+            )
+            continue
+
+        run_df = pd.DataFrame(run_features)
+        subject_row = {"SubjectId": subject_id}
+        for column in run_df.columns:
+            subject_row[column] = float(run_df[column].mean())
+        rows.append(subject_row)
+
+        log_rows.append(
+            {
+                "subject_id": subject_id,
+                "status": "success" if not run_errors else "partial_success",
+                "n_runs_found": len(bold_files),
+                "n_runs_used": len(run_features),
+                "message": " | ".join(run_errors),
+            }
+        )
+
+    if not rows:
+        raise SystemExit("No subjects produced usable connectivity features.")
 
     df = pd.DataFrame(rows)
-    # stable column order: Subject_ID first, then edges sorted
-    edge_cols = sorted([c for c in df.columns if c != "Subject_ID"])
-    df = df[["Subject_ID"] + edge_cols]
+    edge_cols = sorted(column for column in df.columns if column != "SubjectId")
+    df = df[["SubjectId"] + edge_cols].sort_values("SubjectId").reset_index(drop=True)
+    df.to_csv(output_csv, index=False)
+    pd.DataFrame(log_rows).to_csv(log_csv, index=False)
 
-    args.output_csv.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(args.output_csv, index=False)
-    print(f"[DONE] Wrote: {args.output_csv} | shape={df.shape}")
+    print(f"[DONE] Connectivity matrix: {output_csv} | shape={df.shape}")
+    print(f"[DONE] Processing log: {log_csv}")
 
 
 if __name__ == "__main__":

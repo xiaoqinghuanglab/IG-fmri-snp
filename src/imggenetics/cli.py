@@ -1,143 +1,106 @@
-"""Command line interface for the imaging-genetics OLS pipeline.
-
-The design goal is "no code editing": users should be able to run the analysis
-by pointing to input files and an output directory.
-
-Typical usage:
-  python -m imggenetics \
-    --data-dir data \
-    --output-dir outputs/imggenetics
-
-You can also override any default input file path:
-  python -m imggenetics \
-    --genetic-file /path/genotype_matrix.csv \
-    --connectivity-file /path/connectivity.csv \
-    --covariates-file /path/covariates.csv \
-    --snp-metadata-file /path/snp_metadata.csv \
-    --output-dir outputs/imggenetics
-"""
+"""Command-line entry point for the paper-aligned pairwise analysis workflow."""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Iterable
 
-from .pipeline import run_pipeline
-from .utils import setup_logging
+from .pairwise import run_pairwise_analysis
+
+
+def first_existing_path(candidates: Iterable[Path]) -> Path | None:
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def resolve_input_path(explicit: Path | None, candidates: list[Path], label: str) -> Path:
+    if explicit is not None:
+        return explicit
+
+    resolved = first_existing_path(candidates)
+    if resolved is None:
+        tried = "\n".join(f"  - {candidate}" for candidate in candidates)
+        raise FileNotFoundError(f"Could not resolve {label}. Tried:\n{tried}")
+    return resolved
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the argument parser for the `imggenetics` command."""
-
-    p = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         prog="imggenetics",
-        description="Automated SNP×Subtype OLS interaction pipeline for connectivity phenotypes.",
+        description="Pairwise SNP-connectivity interaction analysis for the IG-fmri-snp paper workflow.",
     )
 
-    # Input discovery: by default we look inside a data directory with standard filenames.
-    p.add_argument(
+    parser.add_argument(
         "--data-dir",
         type=Path,
         default=Path("data"),
-        help="Folder containing the 4 required CSV files (default filenames).",
+        help="Folder containing the standard pipeline CSV inputs.",
     )
-
-    # Optional explicit paths override --data-dir lookup.
-    p.add_argument(
-        "--genetic-file",
+    parser.add_argument("--genetic-file", type=Path, default=None, help="Union genotype matrix CSV.")
+    parser.add_argument("--connectivity-file", type=Path, default=None, help="MSDL subject-by-edge connectivity CSV.")
+    parser.add_argument("--covariates-file", type=Path, default=None, help="Covariate CSV with subtype labels.")
+    parser.add_argument("--snp-metadata-file", type=Path, default=None, help="Combined SNP metadata CSV.")
+    parser.add_argument(
+        "--candidate-edges-file",
         type=Path,
         default=None,
-        help="Optional path to genotype_matrix.csv (overrides --data-dir lookup).",
+        help="model2 candidate resilience edge CSV from scripts/fmriphenotype/get_resilience_edge.py",
     )
-    p.add_argument(
-        "--connectivity-file",
+    parser.add_argument(
+        "--output-dir",
         type=Path,
-        default=None,
-        help="Optional path to connectivity CSV (overrides --data-dir lookup).",
+        default=Path("outputs") / "imggenetics",
+        help="Folder where per-comparison results will be written.",
     )
-    p.add_argument(
-        "--covariates-file",
-        type=Path,
-        default=None,
-        help="Optional path to subject_covariates.csv (overrides --data-dir lookup).",
-    )
-    p.add_argument(
-        "--snp-metadata-file",
-        type=Path,
-        default=None,
-        help="Optional path to snp_metadata.csv (overrides --data-dir lookup).",
-    )
-
-    p.add_argument("--output-dir", type=Path, default=Path("outputs"), help="Folder where outputs will be written.")
-
-    # Analysis knobs (mirrors notebook defaults).
-    p.add_argument("--subject-to-exclude", type=str, default="029_S_2395", help="Subject_ID to exclude.")
-    p.add_argument(
-        "--connectivity-col-contains",
-        type=str,
-        default="Connectivity",
-        help="Substring used to identify connectivity feature columns.",
-    )
-    p.add_argument("--snp-prefix", type=str, default="rs", help="Prefix used to identify SNP columns (default: 'rs').")
-    p.add_argument("--min-obs-for-model", type=int, default=10, help="Minimum N required to fit a model.")
-    p.add_argument(
-        "--fdr-threshold",
-        type=float,
-        default=0.05,
-        help="Significance threshold applied to any P_FDR* column.",
-    )
-
-    # Subtype handling.
-    p.add_argument(
-        "--subtypes",
-        nargs="+",
-        default=["Control", "TypAD", "AsymAD"],
-        help="Subtype categories to include (default: Control TypAD AsymAD).",
-    )
-    p.add_argument(
-        "--reference-subtype",
-        type=str,
-        default="Control",
-        help="Reference subtype for Treatment coding (default: Control).",
-    )
-    p.add_argument(
-        "--keep-unknown-subtypes",
-        action="store_true",
-        help="Do not drop rows with subtype labels not listed in --subtypes.",
-    )
-
-    # UX
-    p.add_argument("--no-progress", action="store_true", help="Disable tqdm progress bars.")
-    p.add_argument("-v", "--verbose", action="store_true", help="Verbose logging.")
-
-    return p
+    return parser
 
 
 def main(argv=None) -> int:
-    """CLI entry point."""
-
     args = build_parser().parse_args(argv)
 
-    # Enable logging early so downstream modules can use it.
-    setup_logging(args.verbose)
-
-    run_pipeline(
-        data_dir=args.data_dir,
-        output_dir=args.output_dir,
-        genetic_path=args.genetic_file,
-        connectivity_path=args.connectivity_file,
-        covariates_path=args.covariates_file,
-        snp_metadata_path=args.snp_metadata_file,
-        subject_to_exclude=args.subject_to_exclude,
-        connectivity_col_contains=args.connectivity_col_contains,
-        snp_prefix=args.snp_prefix,
-        min_obs_for_model=args.min_obs_for_model,
-        progress=not args.no_progress,
-        subtype_categories=args.subtypes,
-        reference_subtype=args.reference_subtype,
-        drop_unknown_subtypes=not args.keep_unknown_subtypes,
-        fdr_threshold=args.fdr_threshold,
+    data_dir = args.data_dir
+    connectivity_path = resolve_input_path(
+        args.connectivity_file,
+        [
+            data_dir / "msdl_all_subjects_connectivity_edges.csv",
+            data_dir / "Connectivity_matrix_all_subjects_region_pairs.csv",
+        ],
+        "connectivity file",
+    )
+    covariates_path = resolve_input_path(
+        args.covariates_file,
+        [
+            data_dir / "covariate_file.csv",
+            data_dir / "subject_covariates.csv",
+        ],
+        "covariates file",
+    )
+    genetic_path = resolve_input_path(
+        args.genetic_file,
+        [data_dir / "genotype_matrix.csv"],
+        "genotype matrix",
+    )
+    snp_metadata_path = resolve_input_path(
+        args.snp_metadata_file,
+        [data_dir / "snp_metadata.csv"],
+        "SNP metadata file",
+    )
+    candidate_edges_path = resolve_input_path(
+        args.candidate_edges_file,
+        [data_dir / "model2_candidate_resilience_edges.csv"],
+        "candidate resilience edge file",
     )
 
+    run_pairwise_analysis(
+        connectivity_path=connectivity_path,
+        covariates_path=covariates_path,
+        genetic_path=genetic_path,
+        snp_metadata_path=snp_metadata_path,
+        candidate_edges_path=candidate_edges_path,
+        output_dir=args.output_dir,
+    )
     print(f"Done. Outputs written to: {args.output_dir.resolve()}")
     return 0

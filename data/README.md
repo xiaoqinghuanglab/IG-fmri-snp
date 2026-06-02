@@ -12,14 +12,14 @@ my_data_root/
 │   ├── QC_GENOTYPES_PREFIX.bed
 │   ├── QC_GENOTYPES_PREFIX.bim
 │   └── QC_GENOTYPES_PREFIX.fam
-├── fmri/
-│   ├── raw_nifti/                 # input to FSL preprocessing
-│   └── processed_nifti/           # output from FSL preprocessing
+├── fmriprep_derivatives/
+│   └── sub-XXXX/func/...          # input to MSDL connectivity extraction
 ├── imggenetics_inputs/
 │   ├── genotype_matrix.csv
 │   ├── snp_metadata.csv
-│   ├── subject_covariates.csv
-│   └── Connectivity_matrix_all_subjects_region_pairs.csv
+│   ├── covariate_file.csv
+│   ├── msdl_all_subjects_connectivity_edges.csv
+│   └── model2_candidate_resilience_edges.csv
 ├── transcriptomics/
 │   ├── adni/
 │   │   ├── ADNI_Gene_Expression_Profile.csv
@@ -33,12 +33,13 @@ my_data_root/
 ```
 
 ## Minimal inputs for `imggenetics`
-If you only want to run the SNP×Subtype OLS, you need **four CSV files**:
+If you only want to run the pairwise SNP-connectivity analysis, you need **five CSV files**:
 
-- `genotype_matrix.csv` (must include `Subject_ID`)
-- `Connectivity_matrix_all_subjects_region_pairs.csv` (must include `Subject_ID`)
-- `subject_covariates.csv` (must include `Subject_ID`, `Subtype`, `age`, `sex`, `scanner`, `scan_type`)
-- `snp_metadata.csv` (must include `SNP`, `Case`, `Control`)
+- `genotype_matrix.csv`
+- `snp_metadata.csv`
+- `covariate_file.csv`
+- `msdl_all_subjects_connectivity_edges.csv`
+- `model2_candidate_resilience_edges.csv`
 
 You can pass these as explicit paths using:
-`--genetic-file`, `--connectivity-file`, `--covariates-file`, `--snp-metadata-file`.
+`--genetic-file`, `--connectivity-file`, `--covariates-file`, `--snp-metadata-file`, and `--candidate-edges-file`.

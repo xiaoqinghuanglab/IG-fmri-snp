@@ -1,16 +1,31 @@
-# Pipeline overview
+# Pipeline Overview
 
-This repository organizes code for a subtype-aware imaging-genetics workflow in AD.
+This repository implements a subtype-aware imaging-genetics workflow for Alzheimer's disease.
 
-**Main stages**
-1. **GWAS (PLINK):** run logistic regression per subtype contrast and keep the top-ranked SNPs per contrast.
-   Output: `snp_metadata.csv` + `genotype_matrix.csv` (used as SNP features).
-2. **rs-fMRI preprocessing (FSL):** motion correction, slice timing, MNI alignment, smoothing.
-   Output: subject-level preprocessed 4D NIfTIs.
-3. **Connectivity features (Nilearn + scikit-learn):** extract MSDL ROI time series and compute sparse connectivity via GraphicalLassoCV.
-   Output: `Connectivity_matrix_all_subjects_region_pairs.csv`
-4. **Imaging-genetics association (statsmodels):** OLS with SNP×Subtype interactions for each SNP-edge pair + BH-FDR.
-   Output: `all_regression_result*.csv`, `significant_result.csv`
-5. **Cross-cohort validation (blood expression + MRI):** scripts in `scripts/transcriptomics/` and `scripts/validation/`.
+## Main Stages
 
-Each stage can be run independently and all scripts accept **input/output paths as CLI flags** (no code edits).
+1. **GWAS feature prioritization (PLINK)**
+   Run pairwise subtype GWAS analyses and keep the top-ranked SNPs per contrast.
+   Output: `genotype_matrix.csv` and `snp_metadata.csv`
+
+2. **rs-fMRI preprocessing (fMRIPrep)**
+   Generate MNI-space preprocessed resting-state BOLD files plus confounds tables.
+   Output: fMRIPrep derivatives under a BIDS derivatives directory
+
+3. **Connectivity extraction (MSDL + GraphicalLassoCV)**
+   Extract MSDL ROI time series, regress confounds, apply filtering and z-scoring, and compute signed partial-correlation edges.
+   Output: `msdl_all_subjects_connectivity_edges.csv`
+
+4. **Phenotype-only subtype modeling**
+   Identify candidate resilience-related connectivity edges before SNP-level interpretation.
+   Output: `model2_candidate_resilience_edges.csv` plus related diagnostic tables
+
+5. **Pairwise SNP-connectivity interaction analysis**
+   For `AsymAD_vs_TypAD`, `TypAD_vs_Control`, and `AsymAD_vs_Control`, fit:
+   `edge ~ SNP_c + Group + SNP_c:Group + age + sex + scan_type + manufacturer`
+   Output: per-comparison full tables, significant hits, and lead-SNP-per-edge summaries
+
+6. **Biological interpretation**
+   Export VEP rsID lists, BrainNetViewer edge files, and optional transcriptomic / MRI follow-up analyses.
+
+All runnable stages accept explicit input and output paths so the workflow can be reproduced without editing source files.
