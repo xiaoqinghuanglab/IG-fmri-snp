@@ -8,8 +8,7 @@ This module implements the manuscript-aligned imaging-genetics stage:
        - TypicalAD vs Control
        - AsymAD vs Control
   4) apply BH-FDR to interaction p-values
-  5) export per-comparison full tables, significant hits, lead-SNP summaries,
-     and lightweight diagnostics
+  5) export per-comparison manuscript-ready significant tables plus full tables
 """
 
 from __future__ import annotations
@@ -34,6 +33,23 @@ COMPARISONS: List[Tuple[str, str, str]] = [
     ("AsymAD", "TypicalAD", "AsymAD_vs_TypAD"),
     ("TypicalAD", "Control", "TypAD_vs_Control"),
     ("AsymAD", "Control", "AsymAD_vs_Control"),
+]
+COMPARISON_SHORT_LABELS: Dict[str, str] = {
+    "AsymAD_vs_TypAD": "AvsT",
+    "TypAD_vs_Control": "TvsN",
+    "AsymAD_vs_Control": "AvsN",
+}
+PRIMARY_RESULT_COLUMNS: List[Tuple[str, str]] = [
+    ("edge_id", "Connectivity_Name"),
+    ("genotype_column", "Genotype_Column_Original"),
+    ("CHR", "CHR"),
+    ("BP", "BP"),
+    ("GWAS_P", "GWAS_P"),
+    ("GWAS_OR", "GWAS_OR"),
+    ("beta_interaction", "beta"),
+    ("p_interaction", "p_value"),
+    ("fdr_interaction", "fdr"),
+    ("is_candidate_resilience", "is_candidate_resilience"),
 ]
 
 SNP_METADATA_REQUIRED_COLUMNS = ["SNP", "Case", "Control"]
@@ -239,6 +255,28 @@ def load_connectivity_wide(path: Path) -> Tuple[pd.DataFrame, List[str], str]:
     edge_cols = [column for column in conn.columns if column not in [subject_col, "SubjectId"]]
     conn[edge_cols] = conn[edge_cols].apply(pd.to_numeric, errors="coerce")
     return conn, edge_cols, subject_col
+
+
+def empty_primary_results_df() -> pd.DataFrame:
+    return pd.DataFrame(columns=[renamed for _, renamed in PRIMARY_RESULT_COLUMNS])
+
+
+def build_primary_results_df(results_df: pd.DataFrame) -> pd.DataFrame:
+    if results_df.empty or "fdr_interaction" not in results_df.columns:
+        return empty_primary_results_df()
+
+    primary = results_df[results_df["fdr_interaction"] <= ALPHA].copy()
+    if primary.empty:
+        return empty_primary_results_df()
+
+    keep_cols = [source for source, _ in PRIMARY_RESULT_COLUMNS if source in primary.columns]
+    rename_map = {source: renamed for source, renamed in PRIMARY_RESULT_COLUMNS if source in primary.columns}
+    primary = primary[keep_cols].rename(columns=rename_map)
+    primary = primary.sort_values(
+        ["fdr", "p_value", "GWAS_P", "Connectivity_Name", "Genotype_Column_Original"],
+        na_position="last",
+    ).reset_index(drop=True)
+    return primary
 
 
 def load_covariates(path: Path) -> pd.DataFrame:
@@ -649,6 +687,7 @@ def run_pairwise_analysis(
     print(f"Duplicated rsIDs         : {len(duplicated_rsids)}")
 
     master = prepare_master_analysis_df(connectivity, covariates, genotype_matrix)
+    summary_rows: List[dict] = []
 
     print("\n[Merged master data]")
     print(f"Master shape             : {master.shape}")
@@ -787,12 +826,37 @@ def run_pairwise_analysis(
             na_position="last",
         ).reset_index(drop=True)
 
-        full_out = comp_dir / f"{comparison_name}_full_results.csv.gz"
+        short_label = COMPARISON_SHORT_LABELS.get(comparison_name, comparison_name)
+        primary_df = build_primary_results_df(results_df)
+        primary_out = comp_dir / f"01_{comparison_name}_{short_label}_significant_primary_fdr05.csv"
+        full_out = comp_dir / f"02_{comparison_name}_full_results.csv.gz"
 
+        primary_df.to_csv(primary_out, index=False)
         results_df.to_csv(full_out, index=False, compression="gzip")
+        summary_rows.append(
+            {
+                "comparison": comparison_name,
+                "comparison_short": short_label,
+                "significant_rows_fdr05": int(primary_df.shape[0]),
+                "unique_snp_count": int(primary_df["Genotype_Column_Original"].nunique()) if not primary_df.empty else 0,
+                "unique_edge_count": int(primary_df["Connectivity_Name"].nunique()) if not primary_df.empty else 0,
+                "primary_results_file": str(primary_out.relative_to(output_dir)),
+            }
+        )
 
         print(f"\n[Done] {comparison_name}")
-        print(f"  Full results : {full_out}")
-        print(f"  Result rows  : {results_df.shape[0]}")
+        print(f"  Primary significant table : {primary_out}")
+        print(f"  Full results              : {full_out}")
+        print(f"  Significant rows (FDR<=0.05) : {primary_df.shape[0]}")
+        print(
+            "  Unique SNPs / edges         : "
+            f"{summary_rows[-1]['unique_snp_count']} / {summary_rows[-1]['unique_edge_count']}"
+        )
+
+    if summary_rows:
+        summary_df = pd.DataFrame(summary_rows)
+        summary_out = output_dir / "00_significant_primary_counts.csv"
+        summary_df.to_csv(summary_out, index=False)
+        print(f"\nPrimary-result count summary: {summary_out}")
 
     print("\nAll comparisons finished.")

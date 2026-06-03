@@ -1,6 +1,6 @@
 # Subtype-Aware Imaging Genetics For rs-fMRI Connectivity
 
-This repository contains the code used for a subtype-aware imaging-genetics workflow in Alzheimer's disease. The pipeline links GWAS-prioritized SNPs to resting-state fMRI connectivity edges, identifies candidate resilience-related connections, and produces the imaging-genetics full result tables used in the paper.
+This repository contains the code used for a subtype-aware imaging-genetics workflow in Alzheimer's disease. The pipeline links GWAS-prioritized SNPs to resting-state fMRI connectivity edges, identifies candidate resilience-related connections, and directly produces the manuscript-ready significant result tables used in the paper.
 
 The repo now includes the minimal non-raw CSV inputs needed to rerun the paper's imaging-genetics analysis from a fresh clone. Protected raw ADNI datasets, raw PLINK files, and raw fMRIPrep derivatives are not distributed here; the helper scripts for regenerating connectivity and GWAS-derived inputs are still included under `scripts/fmri/` and `scripts/gwas/`.
 
@@ -218,7 +218,25 @@ bash run.sh imggenetics \
 
 Per comparison, the CLI writes:
 
-- `<comparison>_full_results.csv.gz`
+- `01_<comparison>_<short_label>_significant_primary_fdr05.csv`
+- `02_<comparison>_full_results.csv.gz`
+
+At the top of `outputs/imggenetics/`, it also writes:
+
+- `00_significant_primary_counts.csv`
+
+The primary significant table keeps only the manuscript-facing columns and only rows with `fdr <= 0.05`:
+
+- `Connectivity_Name`
+- `Genotype_Column_Original`
+- `CHR`
+- `BP`
+- `GWAS_P`
+- `GWAS_OR`
+- `beta`
+- `p_value`
+- `fdr`
+- `is_candidate_resilience`
 
 Comparison folders:
 
