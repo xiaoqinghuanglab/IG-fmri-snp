@@ -1,8 +1,8 @@
 # Subtype-Aware Imaging Genetics For rs-fMRI Connectivity
 
-This repository contains the code used for a subtype-aware imaging-genetics workflow in Alzheimer's disease. The pipeline links GWAS-prioritized SNPs to resting-state fMRI connectivity edges, identifies candidate resilience-related connections, and supports downstream variant, transcriptomic, and MRI interpretation.
+This repository contains the code used for a subtype-aware imaging-genetics workflow in Alzheimer's disease. The pipeline links GWAS-prioritized SNPs to resting-state fMRI connectivity edges, identifies candidate resilience-related connections, and produces the imaging-genetics full result tables used in the paper.
 
-The repo now includes the minimal non-raw CSV inputs needed to rerun the paper's downstream analysis from a fresh clone. Protected raw ADNI / ANMerge datasets, raw PLINK files, and raw fMRIPrep derivatives are not distributed here; the helper scripts for regenerating connectivity and GWAS-derived inputs are still included under `scripts/fmri/` and `scripts/gwas/`.
+The repo now includes the minimal non-raw CSV inputs needed to rerun the paper's imaging-genetics analysis from a fresh clone. Protected raw ADNI datasets, raw PLINK files, and raw fMRIPrep derivatives are not distributed here; the helper scripts for regenerating connectivity and GWAS-derived inputs are still included under `scripts/fmri/` and `scripts/gwas/`.
 
 ## Repository Layout
 
@@ -13,9 +13,6 @@ The repo now includes the minimal non-raw CSV inputs needed to rerun the paper's
 │   ├── fmri/                        # fMRIPrep submission + MSDL connectivity extraction
 │   ├── fmriphenotype/               # phenotype-only subtype model / candidate resilience edges
 │   ├── gwas/                        # PLINK helpers and genotype-matrix construction
-│   ├── imggenetics/                 # VEP and BrainNetViewer post-processing
-│   ├── transcriptomics/             # ADNI + ANMerge blood-expression analyses
-│   └── validation/                  # ANMerge expression x MRI interaction models
 ├── docs/                            # workflow notes and GWAS documentation
 ├── data/                            # bundled paper-reproduction inputs
 ├── requirements.txt
@@ -71,10 +68,6 @@ That uses the four bundled input files in `data/`, writes phenotype-only candida
    - `AsymAD_vs_TypAD`
    - `TypAD_vs_Control`
    - `AsymAD_vs_Control`
-6. `scripts/imggenetics/*.py`
-   Exports VEP rsID lists and BrainNetViewer edge files from significant SNP-connectivity results.
-7. `scripts/transcriptomics/` and `scripts/validation/`
-   Optional ADNI / ANMerge follow-up analyses for gene-level interpretation.
 
 Helper documentation:
 
@@ -226,12 +219,6 @@ bash run.sh imggenetics \
 Per comparison, the CLI writes:
 
 - `<comparison>_full_results.csv.gz`
-- `<comparison>_significant_interaction_fdr05.csv`
-- `<comparison>_significant_interaction_fdr05_minimal.csv`
-- `<comparison>_lead_snp_per_edge_fdr05.csv`
-- `<comparison>_summary_counts.csv`
-- `<comparison>_skipped_snps.csv`
-- `comparison_report.txt`
 
 Comparison folders:
 
@@ -239,48 +226,10 @@ Comparison folders:
 - `TypAD_vs_Control/`
 - `AsymAD_vs_Control/`
 
-## Stage 6: Post-Processing
-
-### VEP Input Lists
-
-```bash
-bash run.sh python scripts/imggenetics/export_vep_inputs.py \
-  --results-dir outputs/imggenetics \
-  --out-dir outputs/imggenetics_post
-```
-
-Outputs:
-
-- `VEP_Input_Files/<comparison>_VEP.txt`
-- `GWAS_Results_by_Comparison/<comparison>_results.csv`
-
-### BrainNetViewer Edge Files
-
-Use either the full significant table or the lead-SNP-per-edge table for one comparison.
-
-```bash
-bash run.sh python scripts/imggenetics/brainnetviewer_export.py \
-  --results-csv outputs/imggenetics/AsymAD_vs_TypAD/AsymAD_vs_TypAD_lead_snp_per_edge_fdr05.csv \
-  --out-dir outputs/brainnet \
-  --label AsymAD_vs_TypAD
-```
-
-Outputs:
-
-- `msdl_nodes.node`
-- `edges_<label>.edge`
-
-## Optional Follow-Up Analyses
-
-- [scripts/transcriptomics/adni_expression_preprocess.py](/Users/shihab/Codex/IG-fmri-snp/scripts/transcriptomics/adni_expression_preprocess.py:1)
-- [scripts/transcriptomics/adni_deg_covariates.py](/Users/shihab/Codex/IG-fmri-snp/scripts/transcriptomics/adni_deg_covariates.py:1)
-- [scripts/transcriptomics/anmerge_deg_covariates.py](/Users/shihab/Codex/IG-fmri-snp/scripts/transcriptomics/anmerge_deg_covariates.py:1)
-- [scripts/validation/anmerge_prep_expr_mri.py](/Users/shihab/Codex/IG-fmri-snp/scripts/validation/anmerge_prep_expr_mri.py:1)
-- [scripts/validation/anmerge_mri_interaction_pergene_fdr.py](/Users/shihab/Codex/IG-fmri-snp/scripts/validation/anmerge_mri_interaction_pergene_fdr.py:1)
-
 ## Notes
 
 - The bundled `data/` folder is intentionally limited to the minimal CSV inputs needed for paper reproduction.
 - Raw ADNI / ANMerge data, raw PLINK files, and raw fMRIPrep derivatives remain external and must be supplied locally when regenerating upstream stages.
 - Only the three manuscript groups are used throughout this cleaned workflow: `Control`, `AsymAD`, and `TypicalAD`.
+- The repo now intentionally stops at the imaging-genetics full-result tables; post-processing and downstream interpretation helpers were removed.
 - The paired imaging-genetics sample is modest, especially for Typical AD, so outputs should be interpreted as hypothesis-generating unless independently replicated.

@@ -602,103 +602,6 @@ def fit_one_snp_all_edges(
         }
 
 
-def write_summary_files(comp_dir: Path, comparison_name: str, results_df: pd.DataFrame) -> None:
-    if results_df.empty or "fdr_interaction" not in results_df.columns:
-        sig_df = pd.DataFrame(columns=["SNP", "edge_id", "is_candidate_resilience"])
-    else:
-        sig_df = results_df[results_df["fdr_interaction"] <= ALPHA].copy()
-
-    summary = pd.DataFrame(
-        [
-            {
-                "comparison": comparison_name,
-                "significant_rows_fdr05": int(sig_df.shape[0]),
-                "significant_unique_snps_fdr05": int(sig_df["SNP"].nunique()) if not sig_df.empty else 0,
-                "significant_unique_connectivity_edges_fdr05": int(sig_df["edge_id"].nunique())
-                if not sig_df.empty
-                else 0,
-                "significant_unique_resilience_edges_fdr05": int(
-                    sig_df.loc[sig_df["is_candidate_resilience"] == True, "edge_id"].nunique()
-                )
-                if ("is_candidate_resilience" in sig_df.columns and not sig_df.empty)
-                else 0,
-            }
-        ]
-    )
-    summary.to_csv(comp_dir / f"{comparison_name}_summary_counts.csv", index=False)
-
-    if not sig_df.empty:
-        lead_edge = (
-            sig_df.sort_values(["fdr_interaction", "p_interaction", "GWAS_P"], na_position="last")
-            .drop_duplicates(subset=["edge_id"], keep="first")
-            .copy()
-        )
-        lead_edge.to_csv(comp_dir / f"{comparison_name}_lead_snp_per_edge_fdr05.csv", index=False)
-
-
-def write_report(
-    out_path: Path,
-    comparison_name: str,
-    case_group: str,
-    reference_group: str,
-    df_comp_shape: Tuple[int, int],
-    subtype_counts: pd.Series,
-    nuisance_cols: List[str],
-    dropped_nuisance_cols: List[str],
-    total_union_snps: int,
-    matched_snps: int,
-    missing_snps: int,
-    duplicated_rsids: int,
-    results_df: pd.DataFrame,
-    skipped_df: pd.DataFrame,
-) -> None:
-    if results_df.empty or "fdr_interaction" not in results_df.columns:
-        sig_df = pd.DataFrame()
-    else:
-        sig_df = results_df[results_df["fdr_interaction"] <= ALPHA].copy()
-
-    lines: List[str] = []
-    lines.append(f"Comparison: {comparison_name}")
-    lines.append(f"Case group: {case_group}")
-    lines.append(f"Reference group: {reference_group}")
-    lines.append("Model: edge ~ SNP_c + Group + SNP_c:Group + Age + Sex + Scan_type + Manufacturer")
-    lines.append("")
-    lines.append("[Base comparison data]")
-    lines.append(f"Shape: {df_comp_shape}")
-    lines.append(subtype_counts.to_string())
-    lines.append("")
-    lines.append("[Nuisance covariates used]")
-    lines.extend(nuisance_cols)
-    lines.append("")
-
-    if dropped_nuisance_cols:
-        lines.append("[Dropped redundant nuisance columns]")
-        lines.extend(dropped_nuisance_cols)
-        lines.append("")
-
-    lines.append("[Union SNP summary]")
-    lines.append(f"Union SNPs requested: {total_union_snps}")
-    lines.append(f"Matched to genotype columns: {matched_snps}")
-    lines.append(f"Missing SNPs in genotype matrix: {missing_snps}")
-    lines.append(f"Duplicated rsIDs across genotype columns: {duplicated_rsids}")
-    lines.append("")
-
-    lines.append("[Fit summary]")
-    lines.append(f"Result rows: {results_df.shape[0]}")
-    lines.append(f"Skipped SNPs: {skipped_df.shape[0]}")
-    lines.append(f"Significant rows (FDR<=0.05): {sig_df.shape[0]}")
-    lines.append(f"Significant unique SNPs: {sig_df['SNP'].nunique() if not sig_df.empty else 0}")
-    lines.append(f"Significant unique connectivity edges: {sig_df['edge_id'].nunique() if not sig_df.empty else 0}")
-    lines.append("")
-
-    if not skipped_df.empty and "reason" in skipped_df.columns:
-        lines.append("[Skipped SNP reasons]")
-        lines.append(skipped_df["reason"].value_counts(dropna=False).to_string())
-        lines.append("")
-
-    out_path.write_text("\n".join(lines) + "\n")
-
-
 def run_pairwise_analysis(
     connectivity_path: Path,
     covariates_path: Path,
@@ -745,10 +648,6 @@ def run_pairwise_analysis(
     print(f"Missing SNPs             : {len(missing_snps)}")
     print(f"Duplicated rsIDs         : {len(duplicated_rsids)}")
 
-    missing_snp_out = output_dir / "union_missing_snps.txt"
-    missing_snp_out.write_text("No missing SNPs\n" if not missing_snps else "\n".join(missing_snps) + "\n")
-    resilience_annot.to_csv(output_dir / "candidate_resilience_annotations_used.csv", index=False)
-
     master = prepare_master_analysis_df(connectivity, covariates, genotype_matrix)
 
     print("\n[Merged master data]")
@@ -774,8 +673,6 @@ def run_pairwise_analysis(
             print("[Dropped redundant nuisance columns]")
             for column in dropped_nuisance_cols:
                 print(f"  - {column}")
-
-        df_comp.to_csv(comp_dir / "comparison_base_subjects.csv", index=False)
 
         if df_comp.shape[0] < MIN_TOTAL_N:
             print("[SKIP] Too few subjects overall for this comparison.")
@@ -879,23 +776,6 @@ def run_pairwise_analysis(
         skipped_df = pd.DataFrame(skipped_snps)
         if not results_chunks:
             print("[SKIP] No valid SNP-edge models were fit for this comparison.")
-            skipped_df.to_csv(comp_dir / f"{comparison_name}_skipped_snps.csv", index=False)
-            write_report(
-                out_path=comp_dir / "comparison_report.txt",
-                comparison_name=comparison_name,
-                case_group=case_group,
-                reference_group=reference_group,
-                df_comp_shape=df_comp.shape,
-                subtype_counts=df_comp["Subtype_std"].value_counts(dropna=False),
-                nuisance_cols=nuisance_cols,
-                dropped_nuisance_cols=dropped_nuisance_cols,
-                total_union_snps=snp_metadata.shape[0] + len(missing_snps),
-                matched_snps=snp_metadata.shape[0],
-                missing_snps=len(missing_snps),
-                duplicated_rsids=len(duplicated_rsids),
-                results_df=pd.DataFrame(),
-                skipped_df=skipped_df,
-            )
             continue
 
         results_df = pd.concat(results_chunks, ignore_index=True)
@@ -907,71 +787,12 @@ def run_pairwise_analysis(
             na_position="last",
         ).reset_index(drop=True)
 
-        sig_df = results_df[results_df["fdr_interaction"] <= ALPHA].copy()
-        sig_keep_cols = [
-            column
-            for column in [
-                "comparison",
-                "case_group",
-                "reference_group",
-                "SNP",
-                "genotype_column",
-                "source_comparison",
-                "source_comparisons",
-                "n_source_comparisons",
-                "edge_id",
-                "beta_interaction",
-                "p_interaction",
-                "fdr_interaction",
-                "beta_snp_reference",
-                "beta_snp_case",
-                "GWAS_P",
-                "GWAS_OR",
-                "is_candidate_resilience",
-                "candidate_pattern_label",
-            ]
-            if column in sig_df.columns
-        ]
-        sig_min_df = sig_df[sig_keep_cols].copy()
-
         full_out = comp_dir / f"{comparison_name}_full_results.csv.gz"
-        sig_out = comp_dir / f"{comparison_name}_significant_interaction_fdr05.csv"
-        sig_min_out = comp_dir / f"{comparison_name}_significant_interaction_fdr05_minimal.csv"
-        skipped_out = comp_dir / f"{comparison_name}_skipped_snps.csv"
-        top_out = comp_dir / f"{comparison_name}_top200_by_interaction.csv"
-        report_out = comp_dir / "comparison_report.txt"
 
         results_df.to_csv(full_out, index=False, compression="gzip")
-        sig_df.to_csv(sig_out, index=False)
-        sig_min_df.to_csv(sig_min_out, index=False)
-        skipped_df.to_csv(skipped_out, index=False)
-        results_df.head(200).to_csv(top_out, index=False)
-
-        write_summary_files(comp_dir, comparison_name, results_df)
-        write_report(
-            out_path=report_out,
-            comparison_name=comparison_name,
-            case_group=case_group,
-            reference_group=reference_group,
-            df_comp_shape=df_comp.shape,
-            subtype_counts=df_comp["Subtype_std"].value_counts(dropna=False),
-            nuisance_cols=nuisance_cols,
-            dropped_nuisance_cols=dropped_nuisance_cols,
-            total_union_snps=snp_metadata.shape[0] + len(missing_snps),
-            matched_snps=snp_metadata.shape[0],
-            missing_snps=len(missing_snps),
-            duplicated_rsids=len(duplicated_rsids),
-            results_df=results_df,
-            skipped_df=skipped_df,
-        )
 
         print(f"\n[Done] {comparison_name}")
-        print(f"  Full results                    : {full_out}")
-        print(f"  Significant results (full)      : {sig_out}")
-        print(f"  Significant results (minimal)   : {sig_min_out}")
-        print(f"  Summary counts                  : {comp_dir / f'{comparison_name}_summary_counts.csv'}")
-        print(f"  Significant rows                : {sig_df.shape[0]}")
-        print(f"  Significant unique SNPs         : {sig_df['SNP'].nunique() if not sig_df.empty else 0}")
-        print(f"  Significant unique connectivity : {sig_df['edge_id'].nunique() if not sig_df.empty else 0}")
+        print(f"  Full results : {full_out}")
+        print(f"  Result rows  : {results_df.shape[0]}")
 
     print("\nAll comparisons finished.")
