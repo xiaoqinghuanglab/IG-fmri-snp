@@ -535,7 +535,7 @@ def fit_one_snp_all_edges(
             idx = col_idx[colname]
             beta = betas[idx, :]
             se = np.sqrt(np.maximum(xtx_inv[idx, idx] * sigma2, 0))
-            tval = beta / se
+            tval = np.divide(beta, se, out=np.full_like(beta, np.nan), where=se > 0)
             pval = 2 * stats.t.sf(np.abs(tval), df_resid)
             return beta, se, tval, pval
 
@@ -544,7 +544,7 @@ def fit_one_snp_all_edges(
             beta = (vector.T @ betas).ravel()
             variance = float((vector.T @ xtx_inv @ vector).item())
             se = np.sqrt(np.maximum(variance * sigma2, 0))
-            tval = beta / se
+            tval = np.divide(beta, se, out=np.full_like(beta, np.nan), where=se > 0)
             pval = 2 * stats.t.sf(np.abs(tval), df_resid)
             return beta, se, tval, pval
 
