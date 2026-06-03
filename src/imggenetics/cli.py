@@ -62,6 +62,7 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
 
     data_dir = args.data_dir
+    phenotype_output_dir = Path("outputs") / "fmriphenotype"
     connectivity_path = resolve_input_path(
         args.connectivity_file,
         [
@@ -88,11 +89,25 @@ def main(argv=None) -> int:
         [data_dir / "snp_metadata.csv"],
         "SNP metadata file",
     )
-    candidate_edges_path = resolve_input_path(
-        args.candidate_edges_file,
-        [data_dir / "model2_candidate_resilience_edges.csv"],
-        "candidate resilience edge file",
-    )
+    candidate_edge_candidates = [
+        data_dir / "model2_candidate_resilience_edges.csv",
+        data_dir / "Model2_MSDL_Phenotype" / "model2_candidate_resilience_edges.csv",
+        phenotype_output_dir / "model2_candidate_resilience_edges.csv",
+    ]
+    try:
+        candidate_edges_path = resolve_input_path(
+            args.candidate_edges_file,
+            candidate_edge_candidates,
+            "candidate resilience edge file",
+        )
+    except FileNotFoundError as exc:
+        tried = "\n".join(f"  - {candidate}" for candidate in candidate_edge_candidates)
+        raise FileNotFoundError(
+            "Could not resolve the candidate resilience edge file.\n"
+            "Run `bash run.sh python scripts/fmriphenotype/get_resilience_edge.py` first,\n"
+            "or pass an explicit --candidate-edges-file path.\n"
+            f"Tried:\n{tried}"
+        ) from exc
 
     run_pairwise_analysis(
         connectivity_path=connectivity_path,

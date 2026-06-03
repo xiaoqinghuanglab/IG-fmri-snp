@@ -12,10 +12,10 @@ from statsmodels.stats.multitest import multipletests
 # =========================================================
 # DEFAULT PATHS
 # =========================================================
-BASE_DIR = Path("~/IG-fmri-snp")
-DEFAULT_CONNECTIVITY_FILE = BASE_DIR / "msdl_all_subjects_connectivity_edges.csv"
-DEFAULT_COVARIATE_FILE = BASE_DIR / "covariate_file.csv"
-DEFAULT_OUTPUT_DIR = BASE_DIR / "Model2_MSDL_Phenotype"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CONNECTIVITY_FILE = REPO_ROOT / "data" / "msdl_all_subjects_connectivity_edges.csv"
+DEFAULT_COVARIATE_FILE = REPO_ROOT / "data" / "covariate_file.csv"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "outputs" / "fmriphenotype"
 
 # =========================================================
 # CONFIG

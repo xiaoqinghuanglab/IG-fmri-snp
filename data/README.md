@@ -1,45 +1,35 @@
-# Data layout (local only)
+# Bundled data inputs
 
-This repo does **not** include ADNI/ANMerge protected datasets.
+This repository keeps only the minimal CSV inputs needed to reproduce the paper's downstream analysis after cloning.
 
-You can keep your data anywhere on your machine and point scripts to it using `--input-*` and `--output-*` flags.
+## Files intentionally kept in `data/`
 
-## Recommended local folder layout (example)
-
-```text
-my_data_root/
-├── genotypes/
-│   ├── QC_GENOTYPES_PREFIX.bed
-│   ├── QC_GENOTYPES_PREFIX.bim
-│   └── QC_GENOTYPES_PREFIX.fam
-├── fmriprep_derivatives/
-│   └── sub-XXXX/func/...          # input to MSDL connectivity extraction
-├── imggenetics_inputs/
-│   ├── genotype_matrix.csv
-│   ├── snp_metadata.csv
-│   ├── covariate_file.csv
-│   ├── msdl_all_subjects_connectivity_edges.csv
-│   └── model2_candidate_resilience_edges.csv
-├── transcriptomics/
-│   ├── adni/
-│   │   ├── ADNI_Gene_Expression_Profile.csv
-│   │   └── covariates.csv
-│   └── anmerge/
-│       ├── ANMerge_Unified_Ready_for_DEA.csv
-│       ├── ANMerge_MRI_FS6.0_under_90.csv
-│       ├── ANMerge_NewModel_NewLabel_Clinical_Info.csv
-│       └── ANMerge_blood_rna_gene_expr_removedbatch_02022024.csv
-└── outputs/                        # recommended to keep outputs outside the repo
-```
-
-## Minimal inputs for `imggenetics`
-If you only want to run the pairwise SNP-connectivity analysis, you need **five CSV files**:
-
-- `genotype_matrix.csv`
-- `snp_metadata.csv`
 - `covariate_file.csv`
 - `msdl_all_subjects_connectivity_edges.csv`
-- `model2_candidate_resilience_edges.csv`
+- `genotype_matrix.csv`
+- `snp_metadata.csv`
 
-You can pass these as explicit paths using:
-`--genetic-file`, `--connectivity-file`, `--covariates-file`, `--snp-metadata-file`, and `--candidate-edges-file`.
+These are enough to:
+
+1. generate candidate resilience edges with
+   `bash run.sh python scripts/fmriphenotype/get_resilience_edge.py`
+2. run the pairwise SNP-connectivity analysis with
+   `bash run.sh imggenetics`
+
+## Files intentionally not kept in `data/`
+
+- `model2_candidate_resilience_edges.csv`
+  This is a generated output from the phenotype-only stage and is written to `outputs/fmriphenotype/`.
+- per-contrast intermediate genotype/SNP files
+  These are upstream GWAS intermediates and are replaced here by the final `genotype_matrix.csv` and `snp_metadata.csv`.
+- alternate or outdated connectivity / covariate files
+  The cleaned paper workflow is MSDL-only and uses the current `covariate_file.csv`.
+
+## When you need upstream regeneration
+
+If you want to rebuild the bundled inputs from raw data instead of using the included CSVs:
+
+- connectivity extraction instructions are in [scripts/fmri/README.md](/Users/shihab/Codex/IG-fmri-snp/scripts/fmri/README.md:1)
+- GWAS preparation instructions are in [scripts/gwas/README.md](/Users/shihab/Codex/IG-fmri-snp/scripts/gwas/README.md:1)
+
+Raw ADNI / ANMerge data, raw PLINK files, and raw fMRIPrep derivatives are not distributed in this repo.

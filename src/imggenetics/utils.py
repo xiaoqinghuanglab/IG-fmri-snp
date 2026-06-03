@@ -48,13 +48,12 @@ def normalize_subtype(x: str) -> str:
     """Normalize subtype labels to a consistent short form.
 
     Your datasets may contain multiple spellings for the same subtype.
-    We map common values into the three default analysis labels:
+    We map common values into the three manuscript analysis labels:
       - Control
       - TypAD
       - AsymAD
 
-    We also support a LowNFT label to make it easy to exclude if desired.
-    Unknown labels are returned unchanged.
+    Any other label is returned unchanged and can be filtered upstream.
     """
 
     if x is None:
@@ -70,9 +69,5 @@ def normalize_subtype(x: str) -> str:
         return "TypAD"
     if s_low in {"asymad", "asymptomaticad", "asym"}:
         return "AsymAD"
-
-    # Some label-transfer pipelines output a separate LowNFT category.
-    if s_low in {"lownft", "lownftad", "lownftadni", "lownftadcontrol", "lownftadtypicalad"} or "lownft" in s_low:
-        return "LowNFT"
 
     return s
